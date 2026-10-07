@@ -1,211 +1,30 @@
-(() => {
-  "use strict";
-  const root = document.getElementById("fancy-five-app");
-  if (!root || root.dataset.initialized) return;
-  root.dataset.initialized = "true";
 
-  const puzzles = Array.isArray(window.FANCY_FIVE_PUZZLES) ? window.FANCY_FIVE_PUZZLES : [];
-  const dictionary = window.FANCY_FIVE_DICTIONARY instanceof Set ? window.FANCY_FIVE_DICTIONARY : new Set();
-  const STORAGE_KEY = "fancyFiveV11";
-  const $ = s => root.querySelector(s);
-  const board = $("#ff-board"), input = $("#ff-input"), form = $("#ff-form");
-  const message = $("#ff-message"), result = $("#ff-result");
-  let guesses = [], finished = false;
-
-  function localDateKey() {
-    const d = new Date();
-    const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
-    return `${y}-${m}-${day}`;
-  }
-
-  function selectPuzzle() {
-    if (!puzzles.length) throw new Error("No Fancy Five puzzles configured.");
-    const today = localDateKey();
-    return puzzles.find(p => p.date === today) ||
-      puzzles.filter(p => p.date <= today).slice(-1)[0] ||
-      puzzles[0];
-  }
-
-  const puzzle = selectPuzzle();
-  const answer = String(puzzle.word || "").toUpperCase();
-
-  function safeLoad() {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
-    catch (_) { return {}; }
-  }
-  function safeSave(data) {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (_) {}
-  }
-  let store = safeLoad();
-  store.stats ||= {played:0,wins:0,streak:0,lastWinDate:null};
-  store.days ||= {};
-  const today = localDateKey();
-
-  function score(guess) {
-    const a = answer.split(""), g = guess.split("");
-    const out = Array(5).fill("absent"), counts = {};
-
-    // First pass: exact matches turn green.
-    a.forEach((c,i) => {
-      if (g[i] === c) out[i] = "correct";
-      else counts[c] = (counts[c] || 0) + 1;
-    });
-
-    // Second pass: remaining matching letters turn yellow, respecting duplicates.
-    g.forEach((c,i) => {
-      if (out[i] === "correct") return;
-      if ((counts[c] || 0) > 0) {
-        out[i] = "present";
-        counts[c]--;
-      }
-    });
-    return out;
-  }
-
-  function drawBoard() {
-    board.innerHTML = "";
-    for (let r=0;r<6;r++) {
-      for (let c=0;c<5;c++) {
-        const tile = document.createElement("div");
-        tile.className = "ff-tile";
-        if (guesses[r]) {
-          tile.textContent = guesses[r][c];
-          tile.classList.add(score(guesses[r])[c]);
-        }
-        board.appendChild(tile);
-      }
-    }
-  }
-
-  function keyboardState() {
-    const priority = {absent:1,present:2,correct:3}, state = {};
-    guesses.forEach(g => score(g).forEach((s,i) => {
-      const ch = g[i];
-      if (!state[ch] || priority[s] > priority[state[ch]]) state[ch] = s;
-    }));
-    return state;
-  }
-
-  function drawKeyboard() {
-    const el = $("#ff-keyboard"), state = keyboardState();
-    el.innerHTML = "";
-    ["QWERTYUIOP","ASDFGHJKL","ZXCVBNM"].forEach(row => {
-      const wrap = document.createElement("div");
-      wrap.className = "ff-key-row";
-      [...row].forEach(ch => {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "ff-key";
-        b.textContent = ch;
-        if (state[ch]) b.classList.add(state[ch]);
-        b.addEventListener("click", () => {
-          if (!finished && input.value.length < 5) {
-            input.value += ch;
-            input.focus();
-          }
-        });
-        wrap.appendChild(b);
-      });
-      el.appendChild(wrap);
-    });
-  }
-
-  function complete(win) {
-    finished = true;
-    input.disabled = true;
-    const stats = store.stats;
-
-    if (!store.days[today]?.completed) {
-      stats.played++;
-      if (win) {
-        stats.wins++;
-        stats.streak++;
-      } else {
-        stats.streak = 0;
-      }
-    }
-
-    store.days[today] = {guesses:[...guesses], completed:true, win};
-    safeSave(store);
-
-    message.textContent = win ? `Delicious — solved in ${guesses.length}!` : `Today's answer was ${answer}.`;
-    $("#ff-result-icon").textContent = win ? "🎉" : "🍽️";
-    $("#ff-result-title").textContent = win ? "You got it!" : "Good taste. Tough word.";
-    $("#ff-answer").textContent = `Today's word: ${answer}`;
-    $("#ff-fact").textContent = puzzle.fact || "";
-    $("#ff-played").textContent = stats.played;
-    $("#ff-win").textContent = stats.played ? `${Math.round(stats.wins/stats.played*100)}%` : "0%";
-    $("#ff-streak").textContent = stats.streak;
-
-    const cta = $("#ff-cta");
-    cta.textContent = puzzle.ctaLabel || "Explore Specialty Food";
-    cta.href = puzzle.ctaUrl || "https://www.specialtyfood.com/";
-    result.hidden = false;
-  }
-
-  function submitGuess() {
-    if (finished) return;
-
-    const guess = input.value.toUpperCase().replace(/[^A-Z]/g,"").slice(0,5);
-
-    if (guess.length !== 5) {
-      message.textContent = "Please enter exactly five letters.";
-      return;
-    }
-
-    // v1.2: reject nonsense while accepting words in the comprehensive local dictionary.
-    // The day's answer is always accepted even if an editor adds a new culinary term
-    // before updating dictionary.js.
-    if (guess !== answer && !dictionary.has(guess)) {
-      message.textContent = "Not a recognized English word. Try another five-letter word.";
-      return;
-    }
-
-    guesses.push(guess);
-    input.value = "";
-    drawBoard();
-    drawKeyboard();
-
-    if (guess === answer) complete(true);
-    else if (guesses.length >= 6) complete(false);
-    else message.textContent = `${6-guesses.length} ${6-guesses.length===1?"try":"tries"} remaining.`;
-  }
-
-  form.addEventListener("submit", e => {
-    e.preventDefault();
-    submitGuess();
-  });
-
-  input.addEventListener("input", () => {
-    input.value = input.value.toUpperCase().replace(/[^A-Z]/g,"").slice(0,5);
-  });
-
-  $("#ff-help").addEventListener("click", () => $("#ff-dialog").showModal());
-  $("#ff-close").addEventListener("click", () => $("#ff-dialog").close());
-
-  $("#ff-share").addEventListener("click", async () => {
-    const grid = guesses.map(g => score(g).map(v => v==="correct"?"🟩":v==="present"?"🟨":"⬜").join("")).join("\n");
-    const outcome = store.days[today]?.win ? guesses.length : "X";
-    const text = `Fancy Five ${today} ${outcome}/6\n\n${grid}\n\nSpecialty Food Association`;
-
-    if (navigator.share) {
-      try { await navigator.share({title:"Fancy Five",text}); return; } catch (_) {}
-    }
-
-    const out = $("#ff-share-output");
-    out.value = text;
-    out.hidden = false;
-    $("#ff-share-status").textContent = "Copy the results below to share.";
-  });
-
-  $("#ff-category").textContent = puzzle.category || "Specialty Food";
-
-  const saved = store.days[today];
-  if (saved?.guesses) guesses = saved.guesses.slice(0,6);
-
-  drawBoard();
-  drawKeyboard();
-
-  if (saved?.completed) complete(Boolean(saved.win));
-  else input.focus();
+(function(){
+"use strict";
+var D=window.FANCY_FIVE_DICTIONARY||new Set(), P=window.FANCY_FIVE_PUZZLES||[];
+var $=function(id){return document.getElementById(id)}, STORAGE="wffFancyFiveLaunchV1";
+function dateKey(d){return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
+var today=dateKey(new Date()), puzzle=P.find(function(x){return x.date===today}) || P.filter(function(x){return x.date<=today}).slice(-1)[0] || P[0];
+if(!puzzle){$("ff-message").textContent="No puzzle is scheduled.";return}
+var answer=puzzle.word.toUpperCase(), guesses=[], finished=false, resultWin=false;
+var store={days:{},stats:{played:0,wins:0,currentStreak:0,maxStreak:0,lastWinDate:null}};
+try{store=JSON.parse(localStorage.getItem(STORAGE))||store}catch(e){}
+store.days=store.days||{};store.stats=Object.assign({played:0,wins:0,currentStreak:0,maxStreak:0,lastWinDate:null},store.stats||{});
+function save(){try{localStorage.setItem(STORAGE,JSON.stringify(store))}catch(e){}}
+function emit(name,params){try{window.dataLayer=window.dataLayer||[];window.dataLayer.push(Object.assign({event:name,puzzle_date:today},params||{}))}catch(e){}}
+function dayDiff(a,b){if(!a||!b)return null;var aa=new Date(a+"T12:00:00"),bb=new Date(b+"T12:00:00");return Math.round((bb-aa)/86400000)}
+function score(g){var out=["ff-absent","ff-absent","ff-absent","ff-absent","ff-absent"],cnt={},i,c;for(i=0;i<5;i++){if(g[i]===answer[i])out[i]="ff-correct";else{c=answer[i];cnt[c]=(cnt[c]||0)+1}}for(i=0;i<5;i++){if(out[i]==="ff-correct")continue;c=g[i];if((cnt[c]||0)>0){out[i]="ff-present";cnt[c]--}}return out}
+function board(){var b=$("ff-board");b.innerHTML="";for(var r=0;r<6;r++){var sc=guesses[r]?score(guesses[r]):null;for(var c=0;c<5;c++){var t=document.createElement("div");t.className="ff-tile";t.setAttribute("aria-label","row "+(r+1)+" column "+(c+1));if(guesses[r]){t.textContent=guesses[r][c];t.classList.add(sc[c])}b.appendChild(t)}}}
+function keys(){var pr={"ff-absent":1,"ff-present":2,"ff-correct":3},st={};guesses.forEach(function(g){score(g).forEach(function(s,i){var c=g[i];if(!st[c]||pr[s]>pr[st[c]])st[c]=s})});var k=$("ff-keyboard");k.innerHTML="";["QWERTYUIOP","ASDFGHJKL","ZXCVBNM"].forEach(function(chars){var row=document.createElement("div");row.className="ff-keyrow";chars.split("").forEach(function(letter){var b=document.createElement("button");b.type="button";b.className="ff-button ff-key";b.textContent=letter;b.setAttribute("aria-label","Letter "+letter);if(st[letter])b.classList.add(st[letter]);b.onclick=function(){var inp=$("ff-guess");if(!finished&&inp.value.length<5){inp.value=(inp.value+letter).toUpperCase();inp.focus()}};row.appendChild(b)});k.appendChild(row)})}
+function stats(){var s=store.stats;$("ff-played").textContent=s.played;$("ff-winrate").textContent=(s.played?Math.round(s.wins/s.played*100):0)+"%";$("ff-streak").textContent=s.currentStreak;$("ff-maxstreak").textContent=s.maxStreak}
+function showResult(win,fromLoad){finished=true;resultWin=win;$("ff-guess").disabled=true;$("ff-enter").disabled=true;$("ff-result-title").textContent=win?"You found it.":"Come back for tomorrow's First.";$("ff-answer").textContent="TODAY'S WORD: "+answer;$("ff-fact").textContent=puzzle.fact;$("ff-result").hidden=false;stats();if(!fromLoad)emit("fancy_five_complete",{won:win,guesses:guesses.length})}
+function complete(win){if(!store.days[today]||!store.days[today].completed){store.stats.played++;if(win){store.stats.wins++;var gap=dayDiff(store.stats.lastWinDate,today);store.stats.currentStreak=(gap===1)?store.stats.currentStreak+1:1;store.stats.lastWinDate=today;store.stats.maxStreak=Math.max(store.stats.maxStreak,store.stats.currentStreak)}else store.stats.currentStreak=0}store.days[today]={guesses:guesses.slice(),completed:true,won:win};save();$("ff-message").textContent=win?"You found today's First in "+guesses.length+"!":"Today's word was "+answer+".";showResult(win,false)}
+function submit(){if(finished)return;var inp=$("ff-guess"),g=inp.value.toUpperCase().replace(/[^A-Z]/g,"").slice(0,5);if(g.length!==5){$("ff-message").textContent="Please enter exactly five letters.";return}if(g!==answer&&!D.has(g)){$("ff-message").textContent="Not a recognized English word. Try again.";return}guesses.push(g);inp.value="";board();keys();emit("fancy_five_guess",{guess_number:guesses.length});store.days[today]={guesses:guesses.slice(),completed:false,won:false};save();if(g===answer)complete(true);else if(guesses.length>=6)complete(false);else $("ff-message").textContent=(6-guesses.length)+" "+((6-guesses.length)===1?"try":"tries")+" remaining."}
+function shareText(){var grid=guesses.map(function(g){return score(g).map(function(s){return s==="ff-correct"?"🟩":s==="ff-present"?"🟨":"⬜"}).join("")}).join("\n");return "Winter FancyFaire* Fancy Five "+guesses.length+"/6\n\n"+grid+"\n\nWhere Firsts Are Found"}
+function share(){var txt=shareText();if(navigator.share){navigator.share({title:"Winter FancyFaire* Fancy Five",text:txt}).catch(function(){})}else if(navigator.clipboard){navigator.clipboard.writeText(txt).then(function(){$("ff-message").textContent="Results copied!"}).catch(function(){$("ff-message").textContent="Copy your results from the share panel."})}emit("fancy_five_share",{won:resultWin})}
+$("ff-category").textContent=puzzle.category;$("ff-form").onsubmit=function(e){e.preventDefault();submit()};$("ff-enter").onclick=submit;$("ff-guess").oninput=function(){this.value=this.value.toUpperCase().replace(/[^A-Z]/g,"").slice(0,5)};$("ff-guess").onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();submit()}};$("ff-share").onclick=share;
+$("ff-backspace").onclick=function(){var i=$("ff-guess");i.value=i.value.slice(0,-1);i.focus()};$("ff-clear").onclick=function(){$("ff-guess").value="";$("ff-guess").focus()};
+var modal=$("ff-modal");$("ff-help").onclick=function(){modal.hidden=false;$("ff-close").focus()};$("ff-close").onclick=function(){modal.hidden=true;$("ff-help").focus()};modal.onclick=function(e){if(e.target===modal)modal.hidden=true};document.addEventListener("keydown",function(e){if(e.key==="Escape")modal.hidden=true});
+var existing=store.days[today];if(existing){guesses=(existing.guesses||[]).slice(0,6);board();keys();if(existing.completed){$("ff-message").textContent=existing.won?"You already found today's First!":"Today's word was "+answer+".";showResult(!!existing.won,true)}}
+board();keys();stats();if(!existing)emit("fancy_five_start",{});if(!finished)$("ff-guess").focus();
 })();
